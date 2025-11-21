@@ -6,7 +6,9 @@ export class Body {
     this.vel = vel.clone();
     this.acc = { x: 0, y: 0, z: 0 };
     this.mass = mass;
+    this.density = Math.random();
     this.radius = radius;
+    this.scaleMultiplier = 200000000;
     this.alive = true;
   }
 
@@ -32,10 +34,11 @@ export class Body {
 }
 
 export class PhysicsEngine {
-  constructor(gravitationalConstant = 5) {
+  constructor(gravitationalConstant = 5, radiusFactorConstant = 0.88, collisionConstant = 1, ) {
     this.bodies = [];
     this.G = gravitationalConstant;
-    this.collisionFactor = 1;
+    this.radiusFactor = radiusFactorConstant;
+    this.collisionFactor = collisionConstant;
     this.gridSize = 10;
     this.grid = new Map();
   }
@@ -162,7 +165,7 @@ export class PhysicsEngine {
     if (m1 >= m2) {
       // b1 absorbs b2
       b1.mass = totalMass;
-      b1.radius = Math.pow(b1.mass, 1 / 3) * 0.88;
+      b1.radius = Math.pow(b1.mass, 1 / 3) * this.radiusFactor;
       b1.vel.x = (b1.vel.x * m1 + b2.vel.x * m2) / totalMass;
       b1.vel.y = (b1.vel.y * m1 + b2.vel.y * m2) / totalMass;
       b1.vel.z = (b1.vel.z * m1 + b2.vel.z * m2) / totalMass;
@@ -170,7 +173,7 @@ export class PhysicsEngine {
     } else {
       // b2 absorbs b1
       b2.mass = totalMass;
-      b2.radius = Math.pow(b2.mass, 1 / 3) * 0.88;
+      b2.radius = Math.pow(b2.mass, 1 / 3) * this.radiusFactor;
       b2.vel.x = (b2.vel.x * m2 + b1.vel.x * m1) / totalMass;
       b2.vel.y = (b2.vel.y * m2 + b1.vel.y * m1) / totalMass;
       b2.vel.z = (b2.vel.z * m2 + b1.vel.z * m1) / totalMass;

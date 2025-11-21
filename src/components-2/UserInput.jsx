@@ -38,7 +38,7 @@ export default function UserInput({
           <input
             type="range"
             min="0.1"
-            max="500"
+            max="100"
             step="0.5"
             value={G}
             onChange={(e) => setG(parseFloat(e.target.value))}

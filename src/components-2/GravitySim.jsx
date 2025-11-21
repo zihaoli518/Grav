@@ -34,7 +34,7 @@ export default function GravitySim({
     meshesRef.current = [];
 
     // Create physics engine
-    const physics = new PhysicsEngine(G);
+    const physics = new PhysicsEngine(G, radiusFactor, collisionFactor);
     physics.collisionFactor = collisionFactor;
     physicsRef.current = physics;
 
@@ -44,15 +44,33 @@ export default function GravitySim({
       const mass = Math.random() * 3 + 1;
       const radius = Math.pow(mass, 1 / 3) * radiusFactor;
       const pos = new THREE.Vector3(
-        (Math.random() - 0.5) * 1000,
-        (Math.random() - 0.5) * 400,
-        (Math.random() - 0.5) * 1000
+        (Math.random() - 0.5) * 800,
+        (Math.random() - 0.5) * 2,
+        (Math.random() - 0.5) * 800
       );
       const vel = new THREE.Vector3(
-        (Math.random() - 0.5) * 75,
-        (Math.random() - 0.5) * 10,
-        (Math.random() - 0.5) * 75
+        (Math.random() - 0.5) * 1,
+        (Math.random() - 0.5) * 0.2,
+        (Math.random() - 0.5) * 1
       );
+      
+      // --- ADD ANGULAR MOMENTUM ---
+      const r = pos.clone();
+      r.y = 0;  // force rotation in disk plane
+      
+      // perpendicular direction in XZ plane
+      const tangent = new THREE.Vector3(-r.z, 0, r.x).normalize();
+      
+      // orbital speed scales with radius
+      const spinSpeed = 0.05 * r.length(); // tweak 0.002 → try 0.001–0.01
+      
+      vel.addScaledVector(tangent, spinSpeed);
+      
+      // small turbulence so it isn't perfect
+      vel.x += (Math.random() - 0.5) * 0.2;
+      vel.z += (Math.random() - 0.5) * 0.2;
+      vel.y += (Math.random() - 0.5) * 0.05;
+
       const body = new Body(pos, vel, mass, radius);
       body.color = new THREE.Color().setHSL(Math.random(), 0.7, 0.5);
       physics.addBody(body);
@@ -64,11 +82,12 @@ export default function GravitySim({
         color: body.color,
         roughness: 0.7,
         emissive: body.color,
-        emissiveIntensity: 0.2,
+        emissiveIntensity: 0.05*mass,
       });
       const mesh = new THREE.Mesh(geometry, material);
       mesh.position.copy(pos);
-      mesh.scale.setScalar(radius);
+      mesh.scale.setScalar(body.radius * body.scaleMultiplier);      
+      
       mesh.userData.body = body;
       if (groupRef.current) {
         groupRef.current.add(mesh);
@@ -85,6 +104,8 @@ export default function GravitySim({
 
     const dt = 0.016;
 
+    const glowFactor = 0.003;
+
     physicsRef.current.G = G;
     physicsRef.current.collisionFactor = collisionFactor;
     physicsRef.current.update(dt);
@@ -93,6 +114,7 @@ export default function GravitySim({
     for (let i = 0; i < meshesRef.current.length; i++) {
       const mesh = meshesRef.current[i];
       const body = bodiesRef.current[i];
+
       // console.log('bodiesr emaining:', meshesRef.current.length)
 
       if (!body.alive) {
@@ -102,8 +124,13 @@ export default function GravitySim({
         mesh.position.copy(body.pos);
         // Update scale based on new radius
         const initialRadius = Math.pow(body.mass, 1 / 3) * radiusFactor;
-        mesh.scale.setScalar(body.radius / initialRadius);
+        mesh.scale.setScalar(body.radius * radiusFactor);     
+        mesh.material.emissiveIntensity = Math.pow(body.mass, 1.3) * glowFactor;
       }
+
+      // if (body.mass > 100) {
+      //   console.log('Large body - mass:', body.mass, 'radius:', body.radius, 'scale:', body.radius * body.scaleMultiplier);
+      // }
     }
   });
 
