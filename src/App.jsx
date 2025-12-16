@@ -15,6 +15,8 @@ export default function App() {
   const [radiusFactor, setRadiusFactor] = useState(0.88);
   const [collisionFactor, setCollisionFactor] = useState(0.2);
   const [spawnDistanceFactor, setSpawnDistanceFactor] = useState(200);
+  const [simSpeed, setSimSpeed] = useState(1);
+  const [initialPattern, setInitialPattern] = useState('disc');
 
   return (
     <Box sx={{height: '100%', width: '100%', backgroundColor: 'black'}}>
@@ -29,6 +31,10 @@ export default function App() {
       setRadiusFactor={setRadiusFactor}
       collisionFactor={collisionFactor}
       setCollisionFactor={setCollisionFactor}
+      simSpeed={simSpeed}
+      setSimSpeed={setSimSpeed}
+      initialPattern={initialPattern}
+      setInitialPattern={setInitialPattern}
     />
 
     <Canvas
@@ -62,6 +68,8 @@ export default function App() {
         radiusFactor={radiusFactor}
         collisionFactor={collisionFactor}
         spawnDistanceFactor={spawnDistanceFactor}
+        simSpeed={simSpeed}
+        initialPattern={initialPattern}
       />
 
       {/* Controls last */}

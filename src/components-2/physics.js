@@ -8,7 +8,7 @@ export class Body {
     this.mass = mass;
     this.density = Math.random();
     this.radius = radius;
-    this.scaleMultiplier = 200000000;
+    this.scaleMultiplier = 3;
     this.alive = true;
   }
 
