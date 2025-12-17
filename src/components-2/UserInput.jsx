@@ -48,7 +48,7 @@ export default function UserInput(props) {
           <input
             type="range"
             min="10"
-            max="10000"
+            max="100000"
             step="100"
             value={props.numBodies}
             onChange={(e) => props.setNumBodies(parseInt(e.target.value))}

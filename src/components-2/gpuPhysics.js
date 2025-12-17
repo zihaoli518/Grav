@@ -1,142 +1,203 @@
-import * as THREE from 'three';
-import { GPUComputationRenderer } from 'three/examples/jsm/misc/GPUComputationRenderer.js';
+import * as THREE from "three";
+import { GPUComputationRenderer } from "three/examples/jsm/misc/GPUComputationRenderer.js";
 
 export class GPUPhysicsEngine {
-  constructor(renderer, numBodies, G = 5, radiusFactor = 0.88, collisionFactor = 1) {
+  constructor(renderer, numBodies, G, radiusFactor, collisionFactor) {
     this.renderer = renderer;
     this.numBodies = numBodies;
     this.G = G;
     this.radiusFactor = radiusFactor;
     this.collisionFactor = collisionFactor;
-    this.bodies = [];
-    this.posDataRef = null;
+
     this.gpuCompute = null;
+
     this.posVar = null;
+    this.velVar = null;
+
+    this._posTexSize = numBodies;
   }
 
-  /**
-   * Initialize GPU compute renderer and setup bodies
-   * @param {Array} bodiesData - Array of body objects with {pos, vel, mass, radius, color}
-   */
   init(bodiesData) {
     this.bodies = bodiesData;
 
-    // Create GPU Computation Renderer
-    this.gpuCompute = new GPUComputationRenderer(this.numBodies, 1, this.renderer);
+    this.gpuCompute = new GPUComputationRenderer(
+      this._posTexSize,
+      1,
+      this.renderer
+    );
 
-    // Create position texture (stores x, y, z, mass)
+    // --- Position texture: (x,y,z,mass)
     const posTexture = this.gpuCompute.createTexture();
-    const posArray = posTexture.image.data;
+    const p = posTexture.image.data;
 
-    // Fill texture with initial body data
-    for (let i = 0; i < this.bodies.length; i++) {
+    // --- Velocity texture: (vx,vy,vz,alive/unused)
+    const velTexture = this.gpuCompute.createTexture();
+    const v = velTexture.image.data;
+
+    for (let i = 0; i < this.numBodies; i++) {
       const body = this.bodies[i];
       const idx = i * 4;
 
-      posArray[idx] = body.pos.x;
-      posArray[idx + 1] = body.pos.y;
-      posArray[idx + 2] = body.pos.z;
-      posArray[idx + 3] = body.mass;
+      p[idx] = body.pos.x;
+      p[idx + 1] = body.pos.y;
+      p[idx + 2] = body.pos.z;
+      p[idx + 3] = body.mass;
+
+      v[idx] = body.vel.x;
+      v[idx + 1] = body.vel.y;
+      v[idx + 2] = body.vel.z;
+      v[idx + 3] = 1.0;
     }
 
-    posTexture.needsUpdate = true;
-    this.posDataRef = posArray;
-
-    // Create the compute shader
-    const computeShader = `
+    // --- Compute shaders
+    const common = `
 uniform float G;
 uniform float dt;
+uniform float texSize;
+
+vec4 samplePos(float i) {
+  float u = (i + 0.5) / texSize;
+  return texture2D(texturePosition, vec2(u, 0.5));
+}
+
+vec4 sampleVel(float i) {
+  float u = (i + 0.5) / texSize;
+  return texture2D(textureVelocity, vec2(u, 0.5));
+}
+`;
+
+    // Velocity update: v += a*dt
+    // (simple softening; add damping to keep it stable)
+    const velShader = `
+${common}
 
 void main() {
   vec2 uv = gl_FragCoord.xy / resolution.xy;
-  
+
   vec4 posData = texture2D(texturePosition, uv);
   vec3 pos = posData.xyz;
   float mass = posData.w;
-  
-  vec3 acc = vec3(0.0);
-  
-  // Calculate gravity from all bodies
-  for (int j = 0; j < ${this.numBodies}; j++) {
-    float sampleX = (float(j) + 0.5) / ${this.numBodies.toFixed(1)};
-    vec2 sampleUV = vec2(sampleX, 0.5);
-    
-    vec4 otherPos = texture2D(texturePosition, sampleUV);
-    vec3 otherPos3 = otherPos.xyz;
-    float otherMass = otherPos.w;
-    
-    vec3 delta = otherPos3 - pos;
-    float distSq = dot(delta, delta);
-    
-    if (distSq < 0.01) continue;
-    
-    float dist = sqrt(distSq);
-    float force = (G * mass * otherMass) / distSq;
-    acc += (force / mass / dist) * delta;
-  }
-  
-  // Verlet integration: pos += acc * dt^2
-  vec3 newPos = pos + acc * dt * dt;
-  
-  gl_FragColor = vec4(newPos, mass);
-}
-    `;
 
-    // Add the compute variable
-    this.posVar = this.gpuCompute.addVariable('texturePosition', computeShader, posTexture);
+  vec3 vel = texture2D(textureVelocity, uv).xyz;
+
+  vec3 acc = vec3(0.0);
+  float soft = 0.05; // softening term (stability)
+
+  for (int j = 0; j < ${this.numBodies}; j++) {
+    float fj = float(j);
+
+    vec4 other = samplePos(fj);
+    vec3 op = other.xyz;
+    float om = other.w;
+
+    vec3 d = op - pos;
+    float r2 = dot(d, d) + soft;
+
+    // skip self-ish
+    if (r2 < 0.001) continue;
+
+    float invR = inversesqrt(r2);
+    float invR3 = invR * invR * invR;
+
+    // a += G * om * d / r^3
+    acc += (G * om) * d * invR3;
+  }
+
+  vel += acc * dt;
+
+  // damping to keep things from exploding
+  vel *= 0.999;
+
+  gl_FragColor = vec4(vel, 1.0);
+}
+`;
+
+    // Position update: x += v*dt (uses updated velocity via dependency ping-pong)
+    const posShader = `
+${common}
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / resolution.xy;
+
+  vec4 posData = texture2D(texturePosition, uv);
+  vec3 pos = posData.xyz;
+  float mass = posData.w;
+
+  vec3 vel = texture2D(textureVelocity, uv).xyz;
+
+  pos += vel * dt;
+
+  gl_FragColor = vec4(pos, mass);
+}
+`;
+
+    this.velVar = this.gpuCompute.addVariable(
+      "textureVelocity",
+      velShader,
+      velTexture
+    );
+    this.posVar = this.gpuCompute.addVariable(
+      "texturePosition",
+      posShader,
+      posTexture
+    );
+
+    // uniforms
+    this.velVar.material.uniforms.G = { value: this.G };
+    this.velVar.material.uniforms.dt = { value: 0.016 };
+    this.velVar.material.uniforms.texSize = { value: this._posTexSize };
+
     this.posVar.material.uniforms.G = { value: this.G };
     this.posVar.material.uniforms.dt = { value: 0.016 };
+    this.posVar.material.uniforms.texSize = { value: this._posTexSize };
 
-    // Set dependencies
-    this.gpuCompute.setVariableDependencies(this.posVar, [this.posVar]);
+    // dependencies (both depend on both)
+    this.gpuCompute.setVariableDependencies(this.velVar, [
+      this.posVar,
+      this.velVar,
+    ]);
+    this.gpuCompute.setVariableDependencies(this.posVar, [
+      this.posVar,
+      this.velVar,
+    ]);
 
-    // Initialize GPU compute
     const error = this.gpuCompute.init();
     if (error !== null) {
-      console.error('GPU Compute initialization error:', error);
+      console.error("GPU Compute init error:", error);
       return false;
     }
 
-    console.log('GPU Physics Engine initialized with', this.numBodies, 'bodies');
     return true;
   }
 
-  /**
-   * Update physics simulation
-   * @param {number} dt - Delta time
-   */
   update(dt) {
-    if (!this.gpuCompute || !this.posVar) return false;
+    if (!this.gpuCompute) return false;
 
-    // Update uniforms
+    this.velVar.material.uniforms.dt.value = dt;
+    this.velVar.material.uniforms.G.value = this.G;
+
     this.posVar.material.uniforms.dt.value = dt;
     this.posVar.material.uniforms.G.value = this.G;
 
-    // Run GPU computation
     this.gpuCompute.compute();
-
     return true;
   }
 
-  /**
-   * Get current position data from GPU
-   * @returns {Float32Array} Position data array
-   */
-  getPositionData() {
-    return this.posDataRef;
+  // The key: return the GPU texture, not CPU data
+  getPositionTexture() {
+    if (!this.gpuCompute || !this.posVar) return null;
+    return this.gpuCompute.getCurrentRenderTarget(this.posVar).texture;
   }
 
-  /**
-   * Set gravitational constant
-   */
-  setG(value) {
-    this.G = value;
+  getTexSize() {
+    return this._posTexSize;
   }
 
-  /**
-   * Set collision factor
-   */
-  setCollisionFactor(value) {
-    this.collisionFactor = value;
+  setG(v) {
+    this.G = v;
+  }
+
+  setCollisionFactor(v) {
+    this.collisionFactor = v;
   }
 }

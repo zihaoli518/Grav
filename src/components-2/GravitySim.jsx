@@ -1,7 +1,7 @@
-import { useEffect, useRef } from 'react';
-import { useFrame, useThree } from '@react-three/fiber';
-import * as THREE from 'three';
-import { GPUPhysicsEngine } from './gpuPhysics';
+import { useEffect, useRef } from "react";
+import { useFrame, useThree } from "@react-three/fiber";
+import * as THREE from "three";
+import { GPUPhysicsEngine } from "./gpuPhysics";
 
 export default function GravitySim(props) {
   const {
@@ -10,36 +10,35 @@ export default function GravitySim(props) {
     radiusFactor,
     collisionFactor,
     simSpeed = 1,
-    initialPattern = 'disc',
+    initialPattern = "disc",
+    spawnDistanceFactor = 30,
   } = props;
 
   const { gl } = useThree();
+
   const groupRef = useRef(null);
   const physicsRef = useRef(null);
-  const bodiesRef = useRef([]);
-  const meshesRef = useRef([]);
+  const instancedRef = useRef(null);
+  const materialRef = useRef(null);
   const lastConfigRef = useRef(null);
 
-  function randn() {
-    let u = 0, v = 0;
-    while (u === 0) u = Math.random();
-    while (v === 0) v = Math.random();
-    return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
-  }
-
-  function sampleInSphere(radius) {
-    const u = Math.random();
-    const r = radius * Math.cbrt(u);
-    const theta = Math.acos(2 * Math.random() - 1);
-    const phi = 2 * Math.PI * Math.random();
-    return new THREE.Vector3(
-      r * Math.sin(theta) * Math.cos(phi),
-      r * Math.cos(theta),
-      r * Math.sin(theta) * Math.sin(phi)
+  function makePlaceholderPosTex() {
+    // Use HalfFloatType for better WebGL2 compatibility
+    const data = new Float32Array([0, 0, 0, 1]);
+    const tex = new THREE.DataTexture(
+      data,
+      1,
+      1,
+      THREE.RGBAFormat,
+      THREE.HalfFloatType
     );
+    tex.minFilter = THREE.NearestFilter;
+    tex.magFilter = THREE.NearestFilter;
+    tex.needsUpdate = true;
+    return tex;
   }
 
-  function addDiskRotation(pos, vel, spinK = 0.05, turbulence = 0.2) {
+  function addDiskRotation(pos, vel, spinK, turbulence) {
     const r = pos.clone();
     r.y = 0;
     const tangent = new THREE.Vector3(-r.z, 0, r.x);
@@ -54,118 +53,267 @@ export default function GravitySim(props) {
   function generateBodyStateForIndex(i) {
     if (i === 0) {
       return {
-        mass: -1,
-        radius: Math.pow(-1, 1 / 3) * radiusFactor,
+        mass: 200,
+        radius: Math.abs(Math.cbrt(200)) * radiusFactor,
         pos: new THREE.Vector3(0, 0, 0),
         vel: new THREE.Vector3(0, 0, 0),
       };
     }
 
     const mass = Math.random() * 50 + 1;
-    const radius = Math.pow(mass, 1 / 3) * radiusFactor;
-    let pos, vel;
+    const radius = Math.abs(Math.cbrt(mass)) * radiusFactor;
 
     const angle = Math.random() * Math.PI * 2;
-    const a = 300;
-    const u = Math.random();
-    const radiusN = (a * u) / (1 - u);
-    pos = new THREE.Vector3(Math.cos(angle) * radiusN, 1, Math.sin(angle) * radiusN);
-    vel = new THREE.Vector3((Math.random() - 0.5) * 1, (Math.random() - 0.5) * 0.1, (Math.random() - 0.5) * 1);
-    addDiskRotation(pos, vel);
+    const a = spawnDistanceFactor;
+    const rr = a * Math.sqrt(Math.random());
+    const pos = new THREE.Vector3(
+      Math.cos(angle) * rr,
+      (Math.random() - 0.5) * 0.2,
+      Math.sin(angle) * rr
+    );
+
+    const vel = new THREE.Vector3(
+      (Math.random() - 0.5) * 0.2,
+      (Math.random() - 0.5) * 0.05,
+      (Math.random() - 0.5) * 0.2
+    );
+    addDiskRotation(pos, vel, 0.12, 0.15);
 
     return { mass, radius, pos, vel };
   }
 
-  // Initialize on mount and when config changes
   useEffect(() => {
-    const currentConfig = `${G}-${numBodies}-${radiusFactor}-${collisionFactor}-${initialPattern}`;
-
+    const currentConfig = `${G}-${numBodies}-${radiusFactor}-${collisionFactor}-${initialPattern}-${spawnDistanceFactor}`;
     if (lastConfigRef.current === currentConfig) return;
     lastConfigRef.current = currentConfig;
 
-    console.log('Initializing GPU physics with:', { G, numBodies, radiusFactor, collisionFactor });
+    console.log("[GravitySim] init", {
+      G,
+      numBodies,
+      radiusFactor,
+      collisionFactor,
+      spawnDistanceFactor,
+      isWebGL2: gl.capabilities?.isWebGL2,
+      floatTex: gl.capabilities?.floatFragmentTextures,
+      halfFloatTex: gl.capabilities?.halfFloatFragmentTextures,
+      maxVertexTextures: gl.capabilities?.maxVertexTextures,
+    });
 
-    // Clear old meshes
+    // clear group
     if (groupRef.current) {
       while (groupRef.current.children.length > 0) {
         groupRef.current.remove(groupRef.current.children[0]);
       }
     }
-    meshesRef.current = [];
 
-    // Create body data
+    // DEBUG: always-visible sphere at origin
+    {
+      const dbgGeo = new THREE.SphereGeometry(1, 16, 16);
+      const dbgMat = new THREE.MeshBasicMaterial({ color: "hotpink" });
+      const dbg = new THREE.Mesh(dbgGeo, dbgMat);
+      dbg.position.set(0, 0, 0);
+      groupRef.current.add(dbg);
+      console.log("[GravitySim] added debug hotpink sphere at origin");
+    }
+
+    // bodies
     const bodies = [];
     for (let i = 0; i < numBodies; i++) {
       const { mass, radius, pos, vel } = generateBodyStateForIndex(i);
-      const body = {
-        pos: pos.clone(),
-        vel: vel.clone(),
-        mass,
-        radius,
-        alive: true,
-      };
-      body.color = new THREE.Color().setHSL(Math.random(), 0.7, 0.5);
-      bodies.push(body);
+      const color = new THREE.Color().setHSL(Math.random(), 0.7, 0.6);
+      bodies.push({ mass, radius, pos, vel, color });
     }
 
-    // Create GPU physics engine
-    const physics = new GPUPhysicsEngine(gl, numBodies, G, radiusFactor, collisionFactor);
-    physics.init(bodies);
+    // physics
+    const physics = new GPUPhysicsEngine(
+      gl,
+      numBodies,
+      G,
+      radiusFactor,
+      collisionFactor
+    );
+    const ok = physics.init(bodies);
+    console.log("[GravitySim] physics.init ok?", ok);
+    if (!ok) return;
+
     physicsRef.current = physics;
-    bodiesRef.current = bodies;
 
-    // Create meshes
+    const placeholderTex = makePlaceholderPosTex();
+    const posTex = physics.getPositionTexture();
+    console.log("[GravitySim] posTex from compute:", posTex);
+
+    const initialTex = posTex || placeholderTex;
+    // enforce nearest (sampling exact texel)
+    initialTex.minFilter = THREE.NearestFilter;
+    initialTex.magFilter = THREE.NearestFilter;
+    initialTex.generateMipmaps = false;
+    initialTex.needsUpdate = true;
+
+    // instanced mesh
+    const geometry = new THREE.SphereGeometry(1, 8, 8);
+
+const material = new THREE.MeshNormalMaterial();
+    material.userData.initialPosTex = initialTex;
+
+    
+    material.onBeforeCompile = (shader) => {
+      shader.uniforms.uUseTex = { value: 0.0 }; // start OFF
+      console.log("[GravitySim] onBeforeCompile called");
+
+      shader.uniforms.uPosTex = { value: material.userData.initialPosTex };
+      shader.uniforms.uTexSize = { value: physics.getTexSize() };
+
+      const before = shader.vertexShader;
+
+      shader.vertexShader =
+        `
+attribute float aIndex;
+attribute float aScale;
+uniform sampler2D uPosTex;
+uniform float uTexSize;
+uniform float uUseTex;
+` + shader.vertexShader;
+
+      const needle = "#include <begin_vertex>";
+const replacement = `
+#include <begin_vertex>
+transformed *= aScale;
+if (uUseTex > 0.5) {
+  vec2 puv = vec2((aIndex + 0.5) / uTexSize, 0.5);
+  vec3 p = texture2D(uPosTex, puv).xyz;
+  transformed += p;
+}
+`;
+
+      if (!shader.vertexShader.includes(needle)) {
+        console.warn(
+          "[GravitySim] WARNING: vertexShader missing begin_vertex include; injection may fail"
+        );
+      }
+
+      shader.vertexShader = shader.vertexShader.replace(needle, replacement);
+
+      const after = shader.vertexShader;
+      const replaced = before !== after;
+      const hasInjected =
+        after.includes("uniform sampler2D uPosTex") &&
+        after.includes("aIndex") &&
+        after.includes("texture2D(uPosTex");
+
+      console.log("[GravitySim] shader patched?", { replaced, hasInjected });
+
+      material.userData.shader = shader;
+    };
+
+    material.needsUpdate = true;
+    materialRef.current = material;
+
+    const mesh = new THREE.InstancedMesh(geometry, material, numBodies);
+    mesh.frustumCulled = false;
+    instancedRef.current = mesh;
+
+    // attributes
+    const aIndex = new Float32Array(numBodies);
+    const aScale = new Float32Array(numBodies);
+
+    const dummy = new THREE.Object3D();
+
     for (let i = 0; i < numBodies; i++) {
-      const body = bodies[i];
-      const geometry = new THREE.SphereGeometry(1, 8, 8);
-      const material = new THREE.MeshStandardMaterial({
-        color: body.color,
-        roughness: 0.7,
-        emissive: body.color,
-        emissiveIntensity: 0.05 * Math.abs(body.mass),
-      });
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.position.copy(body.pos);
-      mesh.scale.setScalar(body.radius * 2000000);
-      mesh.userData.bodyIndex = i;
-      groupRef.current.add(mesh);
-      meshesRef.current.push(mesh);
+      aIndex[i] = i;
+      aScale[i] = 1.5;
+
+      // DEBUG fallback: spread instances along X so we WILL see them even if shader fails
+      // (if shader works, they’ll still get overridden by texture offset)
+      dummy.position.set((i % 50) * 0.6 - 15, Math.floor(i / 50) * 0.6 - 15, 0);
+      dummy.rotation.set(0, 0, 0);
+      dummy.scale.set(1, 1, 1);
+      dummy.updateMatrix();
+
+      mesh.setMatrixAt(i, dummy.matrix);
+      mesh.setColorAt(i, bodies[i].color);
     }
 
-    console.log('Simulation initialized with', numBodies, 'bodies');
-  }, [G, numBodies, radiusFactor, collisionFactor, initialPattern, gl]);
+    geometry.setAttribute(
+      "aIndex",
+      new THREE.InstancedBufferAttribute(aIndex, 1)
+    );
+    geometry.setAttribute(
+      "aScale",
+      new THREE.InstancedBufferAttribute(aScale, 1)
+    );
 
-  useFrame(() => {
-    if (!physicsRef.current || bodiesRef.current.length === 0) return;
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
 
-    const dt = (simSpeed / 200) + 0.03;
+    groupRef.current.add(mesh);
 
-    // Update physics engine parameters
+    console.log("[GravitySim] added instanced mesh", {
+      count: numBodies,
+      hasInstanceColor: !!mesh.instanceColor,
+      geomAttrs: Object.keys(geometry.attributes),
+    });
+  }, [
+    G,
+    numBodies,
+    radiusFactor,
+    collisionFactor,
+    initialPattern,
+    spawnDistanceFactor,
+    gl,
+  ]);
+
+  useFrame((state) => {
+    
+    if (!physicsRef.current || !materialRef.current) return;
+
+    if (
+      instancedRef.current &&
+      Math.floor(state.clock.elapsedTime) !==
+        Math.floor(state.clock.elapsedTime - state.clock.getDelta())
+    ) {
+      console.log(
+        "[GravitySim] drawRange",
+        instancedRef.current.count,
+        "visible",
+        instancedRef.current.visible
+      );
+    }
+
+
+    const dt = simSpeed / 200 + 0.005;
+
     physicsRef.current.setG(G);
     physicsRef.current.setCollisionFactor(collisionFactor);
-
-    // Run GPU computation
     physicsRef.current.update(dt);
 
-    // Get position data from GPU
-    const posData = physicsRef.current.getPositionData();
+    const posTex = physicsRef.current.getPositionTexture();
+    const mat = materialRef.current;
 
-    // Update mesh positions
-    for (let i = 0; i < meshesRef.current.length; i++) {
-      const mesh = meshesRef.current[i];
-      const body = bodiesRef.current[i];
-      const idx = i * 4;
+    if (!posTex) {
+      // log once in a while
+      if (Math.floor(state.clock.elapsedTime) % 2 === 0) {
+        console.warn("[GravitySim] posTex is null");
+      }
+      return;
+    }
 
-      const x = posData[idx];
-      const y = posData[idx + 1];
-      const z = posData[idx + 2];
+    posTex.minFilter = THREE.NearestFilter;
+    posTex.magFilter = THREE.NearestFilter;
+    posTex.generateMipmaps = false;
 
-      mesh.position.set(x, y, z);
-      mesh.scale.setScalar(body.radius * 2000000);
-
-      // Debug: log first body position
-      if (i === 0) {
-        console.log('Body 0 pos:', x, y, z);
+    if (mat.userData.shader) {
+      mat.userData.shader.uniforms.uPosTex.value = posTex;
+        mat.userData.shader.uniforms.uUseTex.value = 1.0;
+      // DEBUG: confirm uniform updates
+      if (Math.floor(state.clock.elapsedTime) % 2 === 0) {
+        console.log("[GravitySim] updating uPosTex", posTex);
+      }
+    } else {
+      // if this happens, onBeforeCompile never ran
+      if (Math.floor(state.clock.elapsedTime) % 2 === 0) {
+        console.warn(
+          "[GravitySim] shader not ready yet (onBeforeCompile not run)"
+        );
       }
     }
   });

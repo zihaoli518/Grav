@@ -11,7 +11,7 @@ import {Box} from '@mui/material';
 
 export default function App() {
   const [G, setG] = useState(1);
-  const [numBodies, setNumBodies] = useState(2000);
+  const [numBodies, setNumBodies] = useState(200);
   const [radiusFactor, setRadiusFactor] = useState(0.88);
   const [collisionFactor, setCollisionFactor] = useState(0.2);
   const [spawnDistanceFactor, setSpawnDistanceFactor] = useState(200);
@@ -71,6 +71,7 @@ export default function App() {
         simSpeed={simSpeed}
         initialPattern={initialPattern}
       />
+      
 
       {/* Controls last */}
       <OrbitControls />
