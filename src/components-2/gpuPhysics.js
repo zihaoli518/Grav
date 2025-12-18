@@ -14,15 +14,15 @@ export class GPUPhysicsEngine {
     this.posVar = null;
     this.velVar = null;
 
-    this._posTexSize = numBodies;
-  }
+    this._posTexSize = Math.ceil(Math.sqrt(numBodies));  
+}
 
   init(bodiesData) {
     this.bodies = bodiesData;
 
     this.gpuCompute = new GPUComputationRenderer(
       this._posTexSize,
-      1,
+      this._posTexSize,
       this.renderer
     );
 
@@ -36,7 +36,10 @@ export class GPUPhysicsEngine {
 
     for (let i = 0; i < this.numBodies; i++) {
       const body = this.bodies[i];
-      const idx = i * 4;
+
+      const x = i % this._posTexSize;
+      const y = Math.floor(i / this._posTexSize);
+      const idx = (y * this._posTexSize + x) * 4;
 
       p[idx] = body.pos.x;
       p[idx + 1] = body.pos.y;
@@ -49,22 +52,28 @@ export class GPUPhysicsEngine {
       v[idx + 3] = 1.0;
     }
 
+
     // --- Compute shaders
-    const common = `
+const common = `
 uniform float G;
 uniform float dt;
 uniform float texSize;
 
+vec2 uvFromIndex(float idx) {
+  float x = mod(idx, texSize);
+  float y = floor(idx / texSize);
+  return (vec2(x, y) + 0.5) / vec2(texSize, texSize);
+}
+
 vec4 samplePos(float i) {
-  float u = (i + 0.5) / texSize;
-  return texture2D(texturePosition, vec2(u, 0.5));
+  return texture2D(texturePosition, uvFromIndex(i));
 }
 
 vec4 sampleVel(float i) {
-  float u = (i + 0.5) / texSize;
-  return texture2D(textureVelocity, vec2(u, 0.5));
+  return texture2D(textureVelocity, uvFromIndex(i));
 }
 `;
+
 
     // Velocity update: v += a*dt
     // (simple softening; add damping to keep it stable)
@@ -81,7 +90,7 @@ void main() {
   vec3 vel = texture2D(textureVelocity, uv).xyz;
 
   vec3 acc = vec3(0.0);
-  float soft = 0.05; // softening term (stability)
+  float soft = 0.5; // softening term (stability)
 
   for (int j = 0; j < ${this.numBodies}; j++) {
     float fj = float(j);
@@ -89,6 +98,10 @@ void main() {
     vec4 other = samplePos(fj);
     vec3 op = other.xyz;
     float om = other.w;
+
+    if (om <= 0.0) continue;
+if (mass <= 0.0) { gl_FragColor = vec4(vel, 1.0); return; }
+
 
     vec3 d = op - pos;
     float r2 = dot(d, d) + soft;

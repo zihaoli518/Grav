@@ -30,9 +30,9 @@ export default function UserInput(props) {
           <br />
           <input
             type="range"
-            min="0.1"
-            max="100"
-            step="0.5"
+            min="-5"
+            max="10"
+            step="0.1"
             value={props.G}
             onChange={(e) => props.setG(parseFloat(e.target.value))}
             style={{ width: '100%', marginTop: '5px' }}
@@ -48,7 +48,7 @@ export default function UserInput(props) {
           <input
             type="range"
             min="10"
-            max="100000"
+            max="20000"
             step="100"
             value={props.numBodies}
             onChange={(e) => props.setNumBodies(parseInt(e.target.value))}
