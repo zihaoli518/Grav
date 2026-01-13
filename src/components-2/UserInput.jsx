@@ -65,7 +65,7 @@ export default function UserInput(props) {
           <input
             type="range"
             min="0.1"
-            max="2"
+            max="10"
             step="0.05"
             value={props.radiusFactor}
             onChange={(e) =>
@@ -84,7 +84,7 @@ export default function UserInput(props) {
           <input
             type="range"
             min="0.1"
-            max="3"
+            max="30"
             step="0.1"
             value={props.collisionFactor}
             onChange={(e) =>

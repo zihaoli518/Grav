@@ -11,7 +11,7 @@ export default function GravitySim(props) {
     collisionFactor,
     simSpeed = 1,
     initialPattern = "disc",
-    spawnDistanceFactor = 30,
+    spawnDistanceFactor = 30000,
   } = props;
 
   const { gl } = useThree();
@@ -60,7 +60,7 @@ export default function GravitySim(props) {
       };
     }
 
-    const mass = Math.random() * 5000 + 1;
+    const mass = Math.random() * 500 + 5;
     const radius = Math.abs(Math.cbrt(mass)) * radiusFactor;
 
     const angle = Math.random() * Math.PI * 2;
@@ -107,14 +107,14 @@ export default function GravitySim(props) {
     }
 
     // DEBUG: always-visible sphere at origin
-    {
-      const dbgGeo = new THREE.SphereGeometry(3, 16, 16);
-      const dbgMat = new THREE.MeshBasicMaterial({ color: "orange" });
-      const dbg = new THREE.Mesh(dbgGeo, dbgMat);
-      dbg.position.set(0, 0, 0);
-      groupRef.current.add(dbg);
-      console.log("[GravitySim] added debug hotpink sphere at origin");
-    }
+    // {
+    //   const dbgGeo = new THREE.SphereGeometry(3, 16, 16);
+    //   const dbgMat = new THREE.MeshBasicMaterial({ color: "orange" });
+    //   const dbg = new THREE.Mesh(dbgGeo, dbgMat);
+    //   dbg.position.set(0, 0, 0);
+    //   groupRef.current.add(dbg);
+    //   console.log("[GravitySim] added debug hotpink sphere at origin");
+    // }
 
     // bodies
     const bodies = [];
@@ -173,73 +173,82 @@ material.onBeforeCompile = (shader) => {
   shader.uniforms.uPosTex = { value: material.userData.initialPosTex };
   shader.uniforms.uTexSize = { value: physics.getTexSize() };
   shader.uniforms.uUseTex = { value: 1.0 };
-  shader.uniforms.uGlowStrength = { value: 1.0 }; // tweak live if you want
+  shader.uniforms.uGlowStrength = { value: 1.0 };
+  shader.uniforms.uRadiusFactor = { value: radiusFactor };
+  shader.uniforms.uRenderScale = { value: 1 };
 
   const isGLSL3 =
     shader.vertexShader.includes("#version 300 es") ||
     shader.vertexShader.includes("in vec3 position");
 
   const ATTR = isGLSL3 ? "in" : "attribute";
-  const VARYING_OUT = isGLSL3 ? "out" : "varying";
-  const VARYING_IN = isGLSL3 ? "in" : "varying";
+  const VOUT = isGLSL3 ? "out" : "varying";
+  const VIN = isGLSL3 ? "in" : "varying";
 
-  // ---- VERTEX: declare attributes + varying in a safe include block
+  // ---- VERTEX declarations
   shader.vertexShader = shader.vertexShader.replace(
     "#include <common>",
     `#include <common>
 ${ATTR} float aIndex;
-${ATTR} float aScale;
 ${ATTR} float aGlow;
-${VARYING_OUT} float vGlow;
+${VOUT} float vGlow;
 uniform sampler2D uPosTex;
 uniform float uTexSize;
 uniform float uUseTex;
+uniform float uRadiusFactor;
+uniform float uRenderScale;
 `
   );
 
-  // ---- VERTEX: patch begin_vertex
+  // ---- VERTEX begin_vertex
   shader.vertexShader = shader.vertexShader.replace(
     "#include <begin_vertex>",
     `
 #include <begin_vertex>
 vGlow = aGlow;
-transformed *= aScale;
 
-if (uUseTex > 0.5) {
-  float x = mod(aIndex, uTexSize);
-  float y = floor(aIndex / uTexSize);
-  vec2 puv = (vec2(x, y) + 0.5) / vec2(uTexSize, uTexSize);
-  vec3 p = texture2D(uPosTex, puv).xyz;
-  transformed += p;
+float x = mod(aIndex, uTexSize);
+float y = floor(aIndex / uTexSize);
+vec2 puv = (vec2(x, y) + 0.5) / vec2(uTexSize, uTexSize);
+
+vec4 posData = texture2D(uPosTex, puv);
+vec3 p = posData.xyz;
+float m = posData.w;
+
+if (m <= 0.0) {
+  transformed *= 0.0;
+  transformed += vec3(1e9);
+} else {
+  float r = pow(abs(m), 1.0/3.0) * uRadiusFactor;
+  float s = r * uRenderScale;
+  transformed *= s;
+
+  if (uUseTex > 0.5) transformed += p;
 }
 `
   );
 
-  // ---- FRAGMENT: declare varying + glow strength
+  // ---- FRAGMENT declarations (ONLY GLSL)
   shader.fragmentShader = shader.fragmentShader.replace(
     "#include <common>",
     `#include <common>
-${VARYING_IN} float vGlow;
+${VIN} float vGlow;
 uniform float uGlowStrength;
 `
   );
 
-  // ---- FRAGMENT: add emissive contribution tinted by instance color
-  // In StandardMaterial, "diffuseColor.rgb" contains the base color after vertex colors.
+  // ---- FRAGMENT emissive (vColor exists when vertexColors:true)
   shader.fragmentShader = shader.fragmentShader.replace(
     "#include <emissivemap_fragment>",
     `
 #include <emissivemap_fragment>
-#ifdef USE_COLOR
-  totalEmissiveRadiance += vColor.rgb * (vGlow * uGlowStrength);
-#else
-  totalEmissiveRadiance += vec3(1.0) * (vGlow * uGlowStrength);
-#endif
-`  
-);
+totalEmissiveRadiance += vColor.rgb * (vGlow * uGlowStrength);
+`
+  );
 
   material.userData.shader = shader;
 };
+
 
 
 
@@ -265,8 +274,9 @@ uniform float uGlowStrength;
 
     for (let i = 0; i < numBodies; i++) {
       aIndex[i] = i;
-      aScale[i] = bodies[i].radius * 0.15;
-      aGlow[i] = Math.min(3.0, 0.00015 * Math.abs(bodies[i].mass)); // tweak
+      // aScale[i] = bodies[i].radius * 0.15;
+      // aGlow[i] = Math.min(3.0, 0.00015 * Math.abs(bodies[i].mass)); // tweak
+aGlow[i] = Math.min(3.0, Math.log2(1.0 + bodies[i].mass) * 0.025);
 
       // DEBUG fallback: spread instances along X so we WILL see them even if shader fails
       // (if shader works, they’ll still get overridden by texture offset)
@@ -276,8 +286,6 @@ dummy.scale.set(1, 1, 1);
 dummy.updateMatrix();
 mesh.setMatrixAt(i, dummy.matrix);
 
-
-      mesh.setMatrixAt(i, dummy.matrix);
       mesh.setColorAt(i, bodies[i].color);
     }
 
@@ -287,10 +295,10 @@ mesh.instanceColor.needsUpdate = true;
       "aIndex",
       new THREE.InstancedBufferAttribute(aIndex, 1)
     );
-    geometry.setAttribute(
-      "aScale",
-      new THREE.InstancedBufferAttribute(aScale, 1)
-    );
+    // geometry.setAttribute(
+    //   "aScale",
+    //   new THREE.InstancedBufferAttribute(aScale, 1)
+    // );
 
     geometry.setAttribute(
       "aGlow",
@@ -332,11 +340,10 @@ mesh.instanceColor.needsUpdate = true;
       );
     }
 
-    // const dt = simSpeed / 200 + 0.005;
+  const dt = simSpeed / 200 + 0.001;
+  // const dt = Math.min(dtRaw, 0.004);
+  const subSteps = 8;
 
-    const dtRaw = simSpeed / 200 + 0.005;
-    const dt = Math.min(dtRaw, 0.01);
-    const subSteps = 2;
 
     physicsRef.current.setG(G);
     physicsRef.current.setCollisionFactor(collisionFactor);
@@ -344,6 +351,7 @@ mesh.instanceColor.needsUpdate = true;
     for (let k = 0; k < subSteps; k++) {
       physicsRef.current.update(dt / subSteps);
     }
+    physicsRef.current.maybeMerge();
 
     physicsRef.current.setG(G);
     physicsRef.current.setCollisionFactor(collisionFactor);
@@ -366,6 +374,8 @@ mesh.instanceColor.needsUpdate = true;
     if (mat.userData.shader) {
       mat.userData.shader.uniforms.uPosTex.value = posTex;
       mat.userData.shader.uniforms.uUseTex.value = 1.0;
+        mat.userData.shader.uniforms.uRadiusFactor.value = radiusFactor;
+        mat.userData.shader.uniforms.uRenderScale.value = 1;
       // DEBUG: confirm uniform updates
       if (Math.floor(state.clock.elapsedTime) % 2 === 0) {
         console.log("[GravitySim] updating uPosTex", posTex);

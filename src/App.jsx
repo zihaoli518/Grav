@@ -11,10 +11,10 @@ import {Box} from '@mui/material';
 
 export default function App() {
   const [G, setG] = useState(1);
-  const [numBodies, setNumBodies] = useState(2000);
+  const [numBodies, setNumBodies] = useState(500);
   const [radiusFactor, setRadiusFactor] = useState(0.88);
-  const [collisionFactor, setCollisionFactor] = useState(0.2);
-  const [spawnDistanceFactor, setSpawnDistanceFactor] = useState(200);
+  const [collisionFactor, setCollisionFactor] = useState(1);
+  const [spawnDistanceFactor, setSpawnDistanceFactor] = useState(800);
   const [simSpeed, setSimSpeed] = useState(1);
   const [initialPattern, setInitialPattern] = useState('disc');
 
@@ -39,10 +39,10 @@ export default function App() {
 
     <Canvas
       camera={{
-        position: [0, 0, 80],
+        position: [0, 100, 80],
         fov: 35,
         near: 0.1,
-        far: 200000,   // or even 10000
+        far: 2000000,   // or even 10000
       }}      
       gl={{ disableVertexArrayObjects: true }}
     >
